@@ -1,0 +1,1261 @@
+<!DOCTYPE html><html lang="en"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png+xml" href="/icon/fp black.png">
+    <title>Experiment</title>
+
+    
+    
+    
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f0f0f0;
+      }
+      #jspsych-container {
+        width: 100%;
+        height: 100vh;
+      }
+      #jspsych-target {
+        width: 100%;
+      }
+    </style>
+  <link href="https://unpkg.com/jspsych@8.2.2/css/jspsych.css" rel="stylesheet" type="text/css"><script src="https://unpkg.com/jspsych@8.2.2"></script><script src="https://unpkg.com/jspsych-expbuilder-plugin-dynamic@1.0.0/dist/index.iife.js"></script><link rel="stylesheet" href="https://unpkg.com/@jspsych/plugin-survey@4.0.0/css/survey.css" data-dynamic-styles="true"></head>
+  <body>
+    <div id="jspsych-container">
+      <div id="jspsych-target"></div>
+    </div>
+
+    
+  
+
+<script id="generated-script">
+
+  // --- IndexedDB Wrapper para Batching con TTL (3 días) ---
+  const TrialDB = {
+    dbName: 'jsPsychTrialsDB',
+    storeName: 'trials',
+    db: null,
+    TTL_DAYS: 3,
+
+    async init() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(this.dbName, 1);
+        
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          this.db = request.result;
+          // Limpiar datos vencidos al iniciar
+          this.cleanExpiredData().catch(err => console.error('Error cleaning expired data:', err));
+          resolve(this.db);
+        };
+        
+        request.onupgradeneeded = (event) => {
+          const db = event.target.result;
+          if (!db.objectStoreNames.contains(this.storeName)) {
+            const store = db.createObjectStore(this.storeName, { 
+              keyPath: 'id', 
+              autoIncrement: true 
+            });
+            store.createIndex('sessionId', 'sessionId', { unique: false });
+            store.createIndex('timestamp', 'timestamp', { unique: false });
+            store.createIndex('createdAt', 'createdAt', { unique: false });
+          }
+        };
+      });
+    },
+
+    async cleanExpiredData() {
+      if (!this.db) await this.init();
+      const now = Date.now();
+      const expirationTime = this.TTL_DAYS * 24 * 60 * 60 * 1000; // 3 días en ms
+      
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        const index = store.index('createdAt');
+        const request = index.openCursor();
+        
+        let deletedCount = 0;
+        
+        request.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            const trial = cursor.value;
+            const age = now - (trial.createdAt || now);
+            
+            if (age > expirationTime) {
+              cursor.delete();
+              deletedCount++;
+            }
+            cursor.continue();
+          } else {
+            if (deletedCount > 0) {
+              console.log(`Cleaned ${deletedCount} expired trials from IndexedDB`);
+            }
+            resolve(deletedCount);
+          }
+        };
+        
+        request.onerror = () => reject(request.error);
+      });
+    },
+
+    async add(trial) {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.add({
+          ...trial,
+          timestamp: Date.now(),
+          createdAt: Date.now(),
+          sessionId: trialSessionId
+        });
+        
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    },
+
+    async getAll() {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readonly');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.getAll();
+        
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    },
+
+    async count() {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readonly');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.count();
+        
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    },
+
+    async getN(n) {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readonly');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.getAll(null, n);
+        
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    },
+
+    async deleteN(n) {
+      if (!this.db) await this.init();
+      const trials = await this.getN(n);
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        
+        trials.forEach(trial => {
+          store.delete(trial.id);
+        });
+        
+        transaction.oncomplete = () => resolve(trials.length);
+        transaction.onerror = () => reject(transaction.error);
+      });
+    },
+
+    async clear() {
+      if (!this.db) await this.init();
+      return new Promise((resolve, reject) => {
+        const transaction = this.db.transaction([this.storeName], 'readwrite');
+        const store = transaction.objectStore(this.storeName);
+        const request = store.clear();
+        
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    }
+  };
+
+  // --- Recolectar metadata del sistema ---
+  const getMetadata = () => {
+    const ua = navigator.userAgent;
+    let browserName = 'Unknown';
+    let browserVersion = 'Unknown';
+    
+    if (ua.indexOf('Firefox') > -1) {
+      browserName = 'Firefox';
+      browserVersion = ua.match(/Firefox\/(\d+\.\d+)/)?.[1] || 'Unknown';
+    } else if (ua.indexOf('Chrome') > -1) {
+      browserName = 'Chrome';
+      browserVersion = ua.match(/Chrome\/(\d+\.\d+)/)?.[1] || 'Unknown';
+    } else if (ua.indexOf('Safari') > -1) {
+      browserName = 'Safari';
+      browserVersion = ua.match(/Version\/(\d+\.\d+)/)?.[1] || 'Unknown';
+    } else if (ua.indexOf('Edg') > -1) {
+      browserName = 'Edge';
+      browserVersion = ua.match(/Edg\/(\d+\.\d+)/)?.[1] || 'Unknown';
+    }
+    
+    let osName = 'Unknown';
+    if (ua.indexOf('Win') > -1) osName = 'Windows';
+    else if (ua.indexOf('Mac') > -1) osName = 'macOS';
+    else if (ua.indexOf('Linux') > -1) osName = 'Linux';
+    else if (ua.indexOf('Android') > -1) osName = 'Android';
+    else if (ua.indexOf('iOS') > -1) osName = 'iOS';
+    
+    return {
+      browser: browserName,
+      browserVersion: browserVersion,
+      os: osName,
+      screenWidth: window.screen.width,
+      screenHeight: window.screen.height,
+      screenResolution: `${window.screen.width}x${window.screen.height}`,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      language: navigator.language,
+      userAgent: ua,
+      startedAt: new Date().toISOString()
+    };
+  };
+  
+  const metadata = getMetadata();
+
+  // --- Firebase config ---
+  const firebaseConfig = {
+    apiKey: "AIzaSyBEbJ-uGKzsaf2u24KPamBPVZrUmvhFk-Q",
+    authDomain: "test-e4cf9.firebaseapp.com",
+    databaseURL: "https://test-e4cf9-default-rtdb.firebaseio.com",
+    projectId: "test-e4cf9",
+    storageBucket: "test-e4cf9.firebasestorage.app",
+    messagingSenderId: "414213417080",
+    appId: "1:414213417080:web:98607c621a54d07656e58d"
+  };
+
+  // --- Cargar Firebase SDK ---
+  if (typeof window.firebase === 'undefined') {
+    const script = document.createElement('script');
+    script.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js';
+    script.onload = () => {
+      const dbScript = document.createElement('script');
+      dbScript.src = 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js';
+      dbScript.onload = () => { window._firebaseReady = true; };
+      document.head.appendChild(dbScript);
+    };
+    document.head.appendChild(script);
+  } else {
+    window._firebaseReady = true;
+  }
+
+  function waitForFirebase() {
+    return new Promise(resolve => {
+      if (window._firebaseReady) return resolve();
+      const interval = setInterval(() => {
+        if (window._firebaseReady) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 50);
+    });
+  }
+
+ 
+  const Uid = "ssXr5mrOKLUrmI1J0k8t4Wzdk2u2";
+
+  // Recuperar sessionId de localStorage o crear uno nuevo
+  let trialSessionId = localStorage.getItem('jsPsych_currentSessionId');
+  let storedParticipantNumber = localStorage.getItem('jsPsych_participantNumber');
+  let isResuming = false;
+  
+  if (!trialSessionId) {
+    trialSessionId = "online_" + (crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 10));
+  } else {
+    isResuming = true;
+  }
+
+  let participantNumber;
+
+  async function createSession() {
+    try {
+      const res = await fetch("https://us-central1-test-e4cf9.cloudfunctions.net/apiData", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "*/*" },
+        body: JSON.stringify({
+          experimentID: "eb44ae71-554b-4547-9365-5da1da087cf8",
+          sessionId: trialSessionId,
+          uid: Uid,
+          batchSize: 0
+        }),
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('Error creating session:', errorText);
+        throw new Error(`Failed to create session: ${res.status} - ${errorText}`);
+      }
+      
+      const result = await res.json();
+      console.log('Session created:', result);
+      
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to create session');
+      }
+      
+      return result.participantNumber;
+    } catch (error) {
+      console.error('Error in createSession:', error);
+      alert('Error creating session: ' + error.message);
+      throw error;
+    }
+  }
+
+  
+  // --- Loading overlay ---
+  // Read body background at runtime to match canvas styles injected via <style>
+  const _bgColor = (getComputedStyle(document.body).backgroundColor || '').trim();
+  const _overlayBg = _bgColor && _bgColor !== 'rgba(0, 0, 0, 0)' && _bgColor !== 'transparent' ? _bgColor : '#fff';
+  const _loadingOverlay = document.createElement('div');
+  _loadingOverlay.id = 'jspsych-loading-overlay';
+  _loadingOverlay.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:9999',
+    'display:flex', 'flex-direction:column',
+    'align-items:center', 'justify-content:center',
+    'background:' + _overlayBg, 'gap:20px',
+    'font-family:sans-serif'
+  ].join(';');
+  _loadingOverlay.innerHTML = `
+    <div style="width:48px;height:48px;border:5px solid #e0e0e0;border-top-color:#555;border-radius:50%;animation:_spin 0.8s linear infinite"></div>
+    <p id="jspsych-loading-msg" style="margin:0;color:#555;font-size:15px">Initializing experiment…</p>
+    <style>@keyframes _spin{to{transform:rotate(360deg)}}</style>
+  `;
+  document.body.appendChild(_loadingOverlay);
+
+  function _setLoadingMsg(msg) {
+    const el = document.getElementById('jspsych-loading-msg');
+    if (el) el.textContent = msg;
+  }
+
+  function _hideLoading() {
+    const el = document.getElementById('jspsych-loading-overlay');
+    if (el) el.remove();
+  }
+
+  function _showSuccess() {
+    _hideLoading();
+    const overlay = document.createElement('div');
+    overlay.id = 'jspsych-loading-overlay';
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:9999',
+      'display:flex', 'flex-direction:column',
+      'align-items:center', 'justify-content:center',
+      'background:' + _overlayBg, 'gap:16px',
+      'font-family:sans-serif'
+    ].join(';');
+    overlay.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+        <circle cx="32" cy="32" r="30" fill="#22c55e"/>
+        <polyline points="18,33 28,43 46,22" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p style="margin:0;color:#111;font-size:18px;font-weight:600">Experiment complete. Thank you!</p>
+      <p style="margin:0;color:#555;font-size:14px">You can now close this window.</p>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  function _showLoading(msg) {
+    _hideLoading();
+    const overlay = document.createElement('div');
+    overlay.id = 'jspsych-loading-overlay';
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:9999',
+      'display:flex', 'flex-direction:column',
+      'align-items:center', 'justify-content:center',
+      'background:' + _overlayBg, 'gap:20px',
+      'font-family:sans-serif'
+    ].join(';');
+    overlay.innerHTML = `
+      <div style="width:48px;height:48px;border:5px solid #e0e0e0;border-top-color:#555;border-radius:50%;animation:_spin 0.8s linear infinite"></div>
+      <p id="jspsych-loading-msg" style="margin:0;color:#555;font-size:15px">${msg || 'Please wait…'}</p>
+      <style>@keyframes _spin{to{transform:rotate(360deg)}}</style>
+    `;
+    document.body.appendChild(overlay);
+  }
+
+  
+  // Resuelve a qué trial saltar al reanudar evaluando las branch conditions guardadas.
+  // Retorna el id (string) del trial destino, o null si no hay punto de retoma.
+  function _resolveResumeBranch(resumeRaw) {
+    if (!resumeRaw) return null;
+    try {
+      const d = JSON.parse(resumeRaw);
+      const branches = d.branches || [];
+      const branchConditions = d.branchConditions || [];
+      const trialData = d.trialData || {};
+
+      if (branches.length === 0) return null; // trial terminal, experimento terminó
+      if (branches.length === 1) return String(branches[0]); // único branch, sin condiciones
+
+      // Múltiples branches: evaluar condiciones (OR entre condiciones, AND entre reglas)
+      const flat = Array.isArray(branchConditions[0])
+        ? branchConditions.flat()
+        : branchConditions;
+
+      for (let i = 0; i < flat.length; i++) {
+        const cond = flat[i];
+        if (!cond || !cond.rules) continue;
+        const match = cond.rules.every(rule => {
+          let col = rule.column || '';
+          if (!col && rule.componentIdx && rule.prop) col = rule.componentIdx + '_' + rule.prop;
+          else if (!col && rule.prop) col = rule.prop;
+          let val = trialData[col];
+          // Manejar respuestas anidadas (SurveyComponent)
+          if (val === undefined) {
+            const parts = col.split('_');
+            if (parts.length >= 2) {
+              const resp = trialData[parts.slice(0, -1).join('_') + '_response'];
+              if (resp && typeof resp === 'object') val = resp[parts[parts.length - 1]];
+            }
+          }
+          // Respuestas en array (multi-select)
+          if (Array.isArray(val)) {
+            const has = val.includes(rule.value) || val.includes(String(rule.value));
+            return rule.op === '==' ? has : rule.op === '!=' ? !has : false;
+          }
+          const n1 = parseFloat(val), n2 = parseFloat(rule.value);
+          const isNum = !isNaN(n1) && !isNaN(n2);
+          switch (rule.op) {
+            case '==': return isNum ? n1 === n2 : val == rule.value;
+            case '!=': return isNum ? n1 !== n2 : val != rule.value;
+            case '>':  return isNum && n1 > n2;
+            case '<':  return isNum && n1 < n2;
+            case '>=': return isNum && n1 >= n2;
+            case '<=': return isNum && n1 <= n2;
+            default:   return false;
+          }
+        });
+        if (match && i < branches.length) return String(branches[i]);
+      }
+      return String(branches[0]); // fallback al primero si ninguna condición matchea
+    } catch (e) {
+      return null; // datos corruptos
+    }
+  }
+
+  
+  // --- CAPTCHA gate (hCaptcha or reCAPTCHA v2) ---
+  function _showCaptchaGate(siteKey, provider) {
+    return new Promise((resolve) => {
+      provider = provider || 'hcaptcha';
+
+      // Read body background at call time to match canvas styles
+      const _bgColor = (getComputedStyle(document.body).backgroundColor || '').trim();
+      const _captchaBg = _bgColor && _bgColor !== 'rgba(0, 0, 0, 0)' && _bgColor !== 'transparent' ? _bgColor : '#fff';
+
+      // Load the appropriate script once
+      if (!document.getElementById('captcha-script')) {
+        const s = document.createElement('script');
+        s.id = 'captcha-script';
+        s.async = true;
+        s.defer = true;
+        window._captchaReady = function() { window._captchaAPIReady = true; };
+        if (provider === 'recaptcha') {
+          s.src = 'https://www.google.com/recaptcha/api.js?render=explicit&onload=_captchaReady';
+        } else {
+          s.src = 'https://js.hcaptcha.com/1/api.js?onload=_captchaReady&render=explicit';
+        }
+        document.head.appendChild(s);
+      }
+
+      // Build overlay
+      const overlay = document.createElement('div');
+      overlay.id = 'jspsych-captcha-overlay';
+      overlay.style.cssText = [
+        'position:fixed', 'inset:0', 'z-index:10000',
+        'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'background:' + _captchaBg, 'gap:24px',
+        'font-family:sans-serif'
+      ].join(';');
+      overlay.innerHTML = `
+        <p style="margin:0;color:#333;font-size:17px;font-weight:600">
+          Please verify you are human
+        </p>
+        <div id="captcha-widget"></div>
+      `;
+      document.body.appendChild(overlay);
+
+      function _renderWidget() {
+        if (provider === 'recaptcha') {
+          if (typeof grecaptcha === 'undefined' || !window._captchaAPIReady) {
+            setTimeout(_renderWidget, 100);
+            return;
+          }
+          grecaptcha.render('captcha-widget', {
+            sitekey: siteKey,
+            theme: 'light',
+            callback: function(token) {
+              const el = document.getElementById('jspsych-captcha-overlay');
+              if (el) el.remove();
+              resolve(token);
+            },
+            'error-callback': function() { grecaptcha.reset(); }
+          });
+        } else {
+          // hCaptcha
+          if (typeof hcaptcha === 'undefined' || !window._captchaAPIReady) {
+            setTimeout(_renderWidget, 100);
+            return;
+          }
+          hcaptcha.render('captcha-widget', {
+            sitekey: siteKey,
+            theme: 'light',
+            callback: function(token) {
+              const el = document.getElementById('jspsych-captcha-overlay');
+              if (el) el.remove();
+              resolve(token);
+            },
+            'error-callback': function() { hcaptcha.reset(); }
+          });
+        }
+      }
+
+      _renderWidget();
+    });
+  }
+
+
+  (async () => {
+    // --- CAPTCHA gate (hCaptcha / reCAPTCHA) ---
+    // Se omite en recargas por jump (sessionStorage persiste entre reloads del mismo tab)
+    if (false && "" && !sessionStorage.getItem('jsPsych_captchaPassed')) {
+      const _loadingEl = document.getElementById('jspsych-loading-overlay');
+      if (_loadingEl) _loadingEl.style.display = 'none';
+      await _showCaptchaGate("", "hcaptcha");
+      sessionStorage.setItem('jsPsych_captchaPassed', '1');
+      if (_loadingEl) _loadingEl.style.display = 'flex';
+      _setLoadingMsg('Creating session…');
+    }
+
+    // Leer datos de retoma ANTES de cualquier limpieza
+    const resumeRaw = localStorage.getItem('jsPsych_resumeTrial');
+    const existingJump = localStorage.getItem('jsPsych_jumpToTrial');
+
+    if (!existingJump) {
+      // Sin jump pendiente: derivar destino desde el último trial completado
+      localStorage.removeItem('jsPsych_jumpToTrial');
+      const jumpTarget = _resolveResumeBranch(resumeRaw);
+      localStorage.removeItem('jsPsych_resumeTrial');
+      if (jumpTarget) localStorage.setItem('jsPsych_jumpToTrial', jumpTarget);
+    } else {
+      // Jump ya establecido por repeat/jump — preservarlo, solo limpiar resume
+      localStorage.removeItem('jsPsych_resumeTrial');
+    }
+    
+    // --- Configuración de Batching (cargada desde Firestore) ---
+    const BATCH_CONFIG = {
+      size: 0,
+      currentBatchNumber: 0,
+      resumeTimeoutMinutes: 30,
+      useIndexedDB: true
+    };
+
+    // Inicializar IndexedDB solo si está habilitado
+    if (BATCH_CONFIG.useIndexedDB) {
+      await TrialDB.init();
+    }
+    
+    // Verificar si hay una sesión pendiente (para retoma)
+    let resumedSession = false;
+    
+    if (BATCH_CONFIG.useIndexedDB) {
+      const existingTrials = await TrialDB.getAll();
+      
+      if (existingTrials.length > 0) {
+        const lastTrial = existingTrials[existingTrials.length - 1];
+        
+        if (lastTrial.sessionId === trialSessionId) {
+          BATCH_CONFIG.currentBatchNumber = Math.floor(existingTrials.length / (BATCH_CONFIG.size || 1));
+          resumedSession = true;
+        } else {
+          await TrialDB.clear();
+        }
+      }
+    }
+    
+    // SIEMPRE llamar a createSession (para crear documento en Firestore)
+    // El backend maneja sesiones duplicadas (409) y las retorna correctamente
+    _setLoadingMsg('Creating session…');
+    participantNumber = await createSession();
+    
+    // Guardar sessionId y participantNumber en localStorage para futuras retomas
+    localStorage.setItem('jsPsych_currentSessionId', trialSessionId);
+    localStorage.setItem('jsPsych_participantNumber', participantNumber.toString());
+
+    if (typeof participantNumber !== "number" || isNaN(participantNumber)) {
+      alert("The participant number is not assigned. Please, wait.");
+      throw new Error("participantNumber not assigned");
+    }
+    
+    // Esperar e inicializar Firebase
+    _setLoadingMsg('Loading resources…');
+    await waitForFirebase();
+    if (!window.firebase.apps.length) {
+      window.firebase.initializeApp(firebaseConfig);
+    }
+    const db = window.firebase.database();
+
+    // --- Configurar onDisconnect para finalizar sesión automáticamente ---
+    const sessionRef = db.ref('sessions/eb44ae71-554b-4547-9365-5da1da087cf8/' + trialSessionId);
+    await sessionRef.set({
+      connected: true,
+      experimentID: 'eb44ae71-554b-4547-9365-5da1da087cf8',
+      sessionId: trialSessionId,
+      participantNumber: participantNumber,
+      startedAt: window.firebase.database.ServerValue.TIMESTAMP,
+      storage: 'googledrive',
+      storageProvider: 'googledrive',
+      state: resumedSession ? 'resumed' : 'initiated',
+      lastUpdate: window.firebase.database.ServerValue.TIMESTAMP,
+      metadata: metadata,
+      resumeTimeoutMinutes: BATCH_CONFIG.resumeTimeoutMinutes,
+      useIndexedDB: BATCH_CONFIG.useIndexedDB
+    });
+    
+    sessionRef.onDisconnect().update({
+      connected: false,
+      state: 'disconnected',
+      disconnectedAt: window.firebase.database.ServerValue.TIMESTAMP,
+      storage: 'googledrive'
+    });
+
+    // --- Branching logic functions (outside initJsPsych for timeline access) ---
+    window.nextTrialId = null;
+    window.skipRemaining = false;
+    window.branchingActive = false;
+    window.branchCustomParameters = null; // Store custom parameters for the next trial
+
+    const evaluateCondition = (trialData, condition) => {
+      // All rules in a condition must be true (AND logic)
+      return condition.rules.every(rule => {
+        // Construct column name from componentIdx and prop if column is empty
+        // This handles dynamic plugins like ButtonResponseComponent_1_response
+        let columnName = rule.column || "";
+        if (!columnName && rule.componentIdx && rule.prop) {
+          columnName = rule.componentIdx + '_' + rule.prop;
+        } else if (!columnName && rule.prop) {
+          columnName = rule.prop;
+        }
+        
+        if (!columnName) {
+          console.warn('No column name specified in rule:', rule);
+          return false;
+        }
+        
+        // Get value directly from the column
+        const propValue = trialData[columnName];
+        
+        if (propValue === undefined) {
+          console.warn('Column not found in trial data:', columnName);
+          return false;
+        }
+        
+        const compareValue = rule.value;
+        
+        // Handle array responses (multi-select or single-select returned as array)
+        if (Array.isArray(propValue)) {
+          const matches = propValue.includes(compareValue) || propValue.includes(String(compareValue));
+          switch (rule.op) {
+            case '==':
+              return matches;
+            case '!=':
+              return !matches;
+            default:
+              return false;
+          }
+        }
+        
+        // Convert values for comparison (for non-array values)
+        const numPropValue = parseFloat(propValue);
+        const numCompareValue = parseFloat(compareValue);
+        const isNumeric = !isNaN(numPropValue) && !isNaN(numCompareValue);
+        
+        switch (rule.op) {
+          case '==':
+            return isNumeric ? numPropValue === numCompareValue : propValue == compareValue;
+          case '!=':
+            return isNumeric ? numPropValue !== numCompareValue : propValue != compareValue;
+          case '>':
+            return isNumeric && numPropValue > numCompareValue;
+          case '<':
+            return isNumeric && numPropValue < numCompareValue;
+          case '>=':
+            return isNumeric && numPropValue >= numCompareValue;
+          case '<=':
+            return isNumeric && numPropValue <= numCompareValue;
+          default:
+            return false;
+        }
+      });
+    };
+    
+    const getNextTrialId = (lastTrialData) => {
+      if (!lastTrialData || !lastTrialData.trials || !lastTrialData.trials[0]) {
+        return null;
+      }
+      
+      const trial = lastTrialData.trials[0];
+      
+      // Check if trial/loop has branches
+      if (!Array.isArray(trial.branches) || trial.branches.length === 0) {
+        return null;
+      }
+      
+      // Check if there are conditions to evaluate
+      const hasBranchConditions = Array.isArray(trial.branchConditions) && trial.branchConditions.length > 0;
+      
+      // Check if any condition has customParameters
+      const hasCustomParameters = hasBranchConditions && 
+        trial.branchConditions.flat().some(condition => 
+          condition && condition.customParameters && 
+          Object.keys(condition.customParameters).length > 0
+        );
+      
+      // If there are no conditions AND no custom parameters, auto-branch to first branch
+      if (!hasBranchConditions && !hasCustomParameters) {
+        console.log('No conditions or custom parameters defined, auto-branching to first branch:', trial.branches[0]);
+        return trial.branches[0];
+      }
+      
+      // If there are no conditions but there ARE custom parameters, we can't auto-branch
+      // We need to evaluate conditions to know which customParameters to use
+      if (!hasBranchConditions && hasCustomParameters) {
+        console.log('Custom parameters exist but no conditions, cannot auto-branch');
+        return null;
+      }
+      
+      // If there ARE conditions, evaluate them (regardless of how many branches there are)
+      // branchConditions is an array of arrays, flatten it first
+      const conditions = trial.branchConditions.flat();
+      
+      // Evaluate each condition (OR logic between conditions)
+      for (const condition of conditions) {
+        if (!condition || !condition.rules) {
+          console.warn('Invalid condition structure:', condition);
+          continue;
+        }
+        
+        if (evaluateCondition(trial, condition)) {
+          // Store custom parameters if they exist
+          if (condition.customParameters) {
+            window.branchCustomParameters = condition.customParameters;
+          }
+          return condition.nextTrialId;
+        }
+      }
+      
+      // No condition matched - do NOT branch (conditions were defined but none matched)
+      return null;
+    };
+
+    _hideLoading();
+
+    // --- Recruitment platform URL params (using URLSearchParams - available before initJsPsych) ---
+    const _urlParams = new URLSearchParams(window.location.search);
+    const _prolificPID = _urlParams.get('PROLIFIC_PID');
+    const _prolificStudyID = _urlParams.get('STUDY_ID');
+    const _prolificSessionID = _urlParams.get('SESSION_ID');
+    const _mturkWorkerID = _urlParams.get('workerId');
+    const _mturkAssignmentID = _urlParams.get('assignmentId');
+    const _mturkHitID = _urlParams.get('hitId');
+    const _mturkTurkSubmitTo = _urlParams.get('turkSubmitTo');
+    const _mturkIsPreview = _mturkAssignmentID === 'ASSIGNMENT_ID_NOT_AVAILABLE';
+
+    
+
+    // Track pending batch saves
+    const pendingBatchSaves = [];
+
+    // Función para enviar batch concatenado a Firestore (usando endpoint existente)
+    async function sendBatchConcatenated(trials, batchNumber) {
+      if (trials.length === 0) return;
+      
+      console.log(`Sending concatenated batch #${batchNumber} with ${trials.length} trials`);
+      
+      // Concatenar trials en un documento plano sin anidamiento
+      // Convertir cada trial a string JSON y concatenar con separador
+      const concatenatedData = {
+        batchNumber: batchNumber,
+        trialsCount: trials.length,
+        trialsData: JSON.stringify(trials), // String, no array anidado
+        firstTrialIndex: trials[0]?.trial_index || 0,
+        lastTrialIndex: trials[trials.length - 1]?.trial_index || 0,
+        clientTimestamp: trials[0]?.clientTimestamp || Date.now(),
+        trial_index: `batch_${batchNumber}` // ID único para batch
+      };
+      
+      const batchPromise = fetch("https://us-central1-test-e4cf9.cloudfunctions.net/apiData", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "*/*" },
+        body: JSON.stringify({
+          experimentID: "eb44ae71-554b-4547-9365-5da1da087cf8",
+          sessionId: trialSessionId,
+          data: concatenatedData,
+          storage: "googledrive",
+        }),
+      })
+      .then(res => {
+        if (!res.ok) {
+          return res.text().then(text => {
+            console.error('Error sending batch:', text);
+          });
+        }
+        return res.json();
+      })
+      .then(result => {
+        if (result && result.success) {
+          console.log(`Batch #${batchNumber} sent successfully`);
+        }
+      })
+      .catch(error => {
+        console.error('Error in sendBatchConcatenated:', error);
+      })
+      .finally(() => {
+        const index = pendingBatchSaves.indexOf(batchPromise);
+        if (index > -1) {
+          pendingBatchSaves.splice(index, 1);
+        }
+      });
+      
+      pendingBatchSaves.push(batchPromise);
+      return batchPromise;
+    }
+
+    // Función para enviar experimento completo directo al storage
+    async function sendCompleteExperiment(trials) {
+      if (trials.length === 0) return;
+      
+      console.log(`Sending complete experiment with ${trials.length} trials directly to storage`);
+      
+      // Agregar metadata a cada trial
+      const trialsWithMetadata = trials.map(trial => ({
+        ...trial,
+        session_browser: metadata.browser || "",
+        session_browser_version: metadata.browserVersion || "",
+        session_os: metadata.os || "",
+        session_screen_resolution: metadata.screenResolution || "",
+        session_language: metadata.language || "",
+        session_started_at: metadata.startedAt || "",
+        session_id: trialSessionId,
+      }));
+      
+      // Enviar trials como JSON - el backend los convertirá a CSV
+      const apiBaseUrl = "https://us-central1-test-e4cf9.cloudfunctions.net/apiData".replace('/apiData', '');
+      return fetch(`${apiBaseUrl}/apiDataComplete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "*/*" },
+        body: JSON.stringify({
+          experimentID: "eb44ae71-554b-4547-9365-5da1da087cf8",
+          sessionId: trialSessionId,
+          trialsData: trialsWithMetadata,
+          storage: "googledrive",
+        }),
+      })
+      .then(res => {
+        if (!res.ok) {
+          return res.text().then(text => {
+            console.error('Error sending complete experiment:', text);
+            throw new Error(text);
+          });
+        }
+        return res.json();
+      })
+      .then(result => {
+        if (result && result.success) {
+          console.log('Complete experiment sent successfully to storage');
+        }
+        return result;
+      })
+      .catch(error => {
+        console.error('Error in sendCompleteExperiment:', error);
+        throw error;
+      });
+    }
+
+    const jsPsych = initJsPsych({
+      display_element: document.getElementById('jspsych-container'),
+
+      on_trial_start: function(trial) {
+        const lastTrialData = jsPsych.data.get()
+        if (lastTrialData && trial.data) {
+        trial.data.prev_response = lastTrialData.response;
+        }
+      },
+
+      
+
+      on_data_update: async function (data) {
+
+        // Agregar timestamp del cliente para ordenamiento correcto
+        data.clientTimestamp = Date.now();
+        data.sessionId = trialSessionId;
+        data.experimentID = "eb44ae71-554b-4547-9365-5da1da087cf8";
+
+        // Actualizar estado a 'in-progress' en la primera actualización
+        if (data.trial_index === 0) {
+          sessionRef.update({
+            state: 'in-progress',
+            lastUpdate: window.firebase.database.ServerValue.TIMESTAMP
+          }).catch(err => console.error('Error updating state:', err));
+        }
+
+        // 🔄 SISTEMA DE RETOMA: Guardar branches + datos del trial para evaluar al reanudar
+        if (data.builder_id !== undefined && data.builder_id !== null) {
+          localStorage.setItem('jsPsych_resumeTrial', JSON.stringify({
+            branches: data.branches || [],
+            branchConditions: data.branchConditions || [],
+            trialData: data
+          }));
+        }
+
+        if (BATCH_CONFIG.useIndexedDB) {
+          // --- CON IndexedDB: Batching habilitado ---
+          try {
+            await TrialDB.add(data);
+            console.log(`Trial ${data.trial_index} saved to IndexedDB`);
+          } catch (error) {
+            console.error('Error saving to IndexedDB:', error);
+          }
+
+          // Solo enviar batches si batchSize > 0
+          if (BATCH_CONFIG.size > 0) {
+            const pendingCount = await TrialDB.count();
+            
+            // Enviar batch cuando se acumule el tamaño configurado
+            if (pendingCount >= BATCH_CONFIG.size) {
+              const batch = await TrialDB.getN(BATCH_CONFIG.size);
+              BATCH_CONFIG.currentBatchNumber++;
+              
+              // Enviar batch concatenado a Firestore
+              await sendBatchConcatenated(batch, BATCH_CONFIG.currentBatchNumber);
+              
+              // Eliminar trials enviados de IndexedDB
+              await TrialDB.deleteN(BATCH_CONFIG.size);
+              
+              console.log(`Batch #${BATCH_CONFIG.currentBatchNumber} sent, ${batch.length} trials`);
+            }
+          }
+          // Si batchSize = 0, solo acumular en IndexedDB, enviar TODO en on_finish
+        } else {
+          // --- SIN IndexedDB: Enviar trial por trial a Firestore ---
+          try {
+            const response = await fetch("https://us-central1-test-e4cf9.cloudfunctions.net/apiData", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                experimentID: "eb44ae71-554b-4547-9365-5da1da087cf8",
+                sessionId: trialSessionId,
+                data: data
+              })
+            });
+
+            if (!response.ok) {
+              console.error('Error sending trial to Firestore:', await response.text());
+            } else {
+              console.log(`Trial ${data.trial_index} sent to Firestore`);
+            }
+          } catch (error) {
+            console.error('Error sending trial:', error);
+          }
+        }
+
+        // Solo evaluar branching si el trial/loop tiene un trial_id o loop_id válido
+      if ((!data.trial_id || data.trial_id === undefined) && (!data.loop_id || data.loop_id === undefined)) {
+        return;
+      }
+      
+      const lastTrialData = jsPsych.data.getLastTrialData();
+      const trial = lastTrialData.trials ? lastTrialData.trials[0] : null;
+      
+      // Verificar si este trial/loop tiene branches
+      if (!trial || !trial.branches || trial.branches.length === 0) {
+        return; // No tiene branches, no hay nada que hacer
+      }
+      
+      // IMPORTANTE: Si el trial está dentro de un loop (isInLoop = true),
+      // NO activar el branching global. Los trials dentro de loops usan su propio
+      // sistema de branching con variables locales (loopNextTrialId, etc.)
+      if (trial.isInLoop === true) {
+        return;
+      }
+      
+      const nextTrialId = getNextTrialId(lastTrialData);
+      
+      if (nextTrialId) {
+        // Check if nextTrialId is "FINISH_EXPERIMENT"
+        if (nextTrialId === 'FINISH_EXPERIMENT') {
+          console.log('🏁 [BRANCHING] Finishing experiment via branching');
+          jsPsych.abortExperiment('Experiment finished by branching condition', {});
+          return;
+        }
+        
+        console.log('🎯 [BRANCHING] Setting global branch target:', nextTrialId);
+        window.nextTrialId = nextTrialId;
+        window.skipRemaining = true;
+        window.branchingActive = true;
+        console.log('🎯 [BRANCHING] Skip remaining activated');
+      }
+      },
+
+      on_finish: async function() {
+        // Si hay un repeat/jump pendiente, recargar para ejecutarlo
+        if (localStorage.getItem('jsPsych_jumpToTrial')) {
+          if (pendingBatchSaves.length > 0) await Promise.allSettled(pendingBatchSaves);
+          window.location.reload();
+          return;
+        }
+
+        _showLoading('Saving your data…');
+        await new Promise(r => setTimeout(r, 0));
+        
+        // Limpiar datos de retoma ya que el experimento terminó correctamente
+        localStorage.removeItem('jsPsych_resumeTrial');
+        localStorage.removeItem('jsPsych_currentSessionId');
+        localStorage.removeItem('jsPsych_participantNumber');
+        sessionStorage.removeItem('jsPsych_captchaPassed');
+
+        if (BATCH_CONFIG.useIndexedDB) {
+          // --- CON IndexedDB: Enviar datos acumulados ---
+          
+          // Esperar cualquier batch pendiente
+          if (pendingBatchSaves.length > 0) {
+            _setLoadingMsg('Uploading batches…');
+            await Promise.allSettled(pendingBatchSaves);
+          }
+
+          const allTrials = await TrialDB.getAll();
+          
+          if (allTrials.length > 0) {
+            if (BATCH_CONFIG.size === 0) {
+              try {
+                _setLoadingMsg('Uploading data…');
+                await sendCompleteExperiment(allTrials);
+                await TrialDB.clear();
+              } catch (error) {
+                console.error('Error sending complete experiment:', error);
+                _setLoadingMsg('Error saving data. Please contact support.');
+                return;
+              }
+            } else {
+              BATCH_CONFIG.currentBatchNumber++;
+              _setLoadingMsg('Sending final batch…');
+              await sendBatchConcatenated(allTrials, BATCH_CONFIG.currentBatchNumber);
+              await TrialDB.clear();
+              
+              if (pendingBatchSaves.length > 0) {
+                _setLoadingMsg('Finishing upload…');
+                await Promise.allSettled(pendingBatchSaves);
+              }
+            }
+          }
+        }
+        
+        // Cancelar el onDisconnect para evitar que marque como abandoned
+        sessionRef.onDisconnect().cancel();
+
+        _setLoadingMsg('Finishing up…');
+        
+        try {
+          const needsBackendFinalization = !(BATCH_CONFIG.useIndexedDB && BATCH_CONFIG.size === 0);
+          
+          await sessionRef.update({
+            connected: false,
+            finished: true,
+            needsFinalization: needsBackendFinalization,
+            state: 'completed',
+            finishedAt: window.firebase.database.ServerValue.TIMESTAMP,
+            lastUpdate: window.firebase.database.ServerValue.TIMESTAMP
+          });
+        } catch (error) {
+          console.error('Error marking session as finished:', error);
+        }
+
+        // --- Recruitment platform redirect ---
+        
+        
+        _hideLoading();
+      }
+    });
+    
+    // Uncomment to see the json results after finishing a session experiment
+    // jsPsych.data.displayData('csv');
+
+    
+
+    const timeline = [];
+
+    // Global preload for all uploaded files from Timeline
+    
+
+    
+    const test_stimuli_New_Trial = [{components: [{ type: "TextComponent", coordinates: {"x":0.1953125,"y":43.75}, zIndex: 1, text: "Prueba github", font_color: "#000000", font_size: 16, font_family: "sans-serif", font_weight: "normal", font_style: "normal", text_align: "center", line_height: 1.5, background_color: "transparent", padding: "0px", border_radius: 0, border_color: "transparent", border_width: 0, name: "TextComponent_1", _font_size_runtime_vw: 0.625 }],
+response_components: [{ type: "ButtonResponseComponent", coordinates: {"x":-0.9765625,"y":18.229166666666657}, zIndex: 2, choices: ["Button"], button_color: "#e7e7e7", button_text_color: "#000000", button_font_size: 14, button_border_radius: 3, button_border_color: "#999999", button_border_width: 1, button_padding: "6px 14px", name: "ButtonResponseComponent_1", _button_font_size_runtime_vw: 0.546875 }]}];
+    const New_Trial_timeline = {
+    type: DynamicPlugin, components: jsPsych.timelineVariable("components"),
+response_components: jsPsych.timelineVariable("response_components"),
+      data: {
+        rt: "rt",
+        trial_id: 1772821583646,
+        builder_id: 1772821583646,
+        
+        
+      },
+    on_start: function(trial) {
+      // Then apply custom parameters from branching conditions (higher priority)
+      // For trials outside loops, use window.branchCustomParameters
+      if (window.branchCustomParameters && typeof window.branchCustomParameters === 'object') {
+        Object.entries(window.branchCustomParameters).forEach(([key, param]) => {
+          if (param && param.source !== 'none') {
+            // Parse key to check if it's a nested survey question
+            const parts = key.split('::');
+            
+            if (parts.length === 4) {
+              // Format: fieldType::componentName::survey_json::questionName
+              const [fieldType, componentName, propName, questionName] = parts;
+              
+              if (fieldType && componentName && propName === 'survey_json' && questionName) {
+                // Find the component by name in the field array
+                const fieldArray = trial[fieldType];
+                if (Array.isArray(fieldArray)) {
+                  const compIndex = fieldArray.findIndex(c => c.name === componentName);
+                  if (compIndex !== -1 && fieldArray[compIndex].survey_json) {
+                    // Find the question in survey_json.elements
+                    const elements = fieldArray[compIndex].survey_json.elements || [];
+                    const questionIndex = elements.findIndex(q => q.name === questionName);
+                    
+                    if (questionIndex !== -1) {
+                      // Apply the override value (from typed or csv)
+                      let valueToSet;
+                      if (param.source === 'typed') {
+                        valueToSet = String(param.value); // Convert to string for SurveyJS
+                      } else if (param.source === 'csv') {
+                        valueToSet = String(trial[param.value]); // Get from CSV column and convert to string
+                      }
+                      
+                      if (valueToSet !== undefined && valueToSet !== null) {
+                        fieldArray[compIndex].survey_json.elements[questionIndex].defaultValue = valueToSet;
+                      }
+                    }
+                  }
+                }
+              }
+            } else if (parts.length === 3) {
+              // Format: fieldType::componentName::property (for DynamicPlugin components)
+              const [fieldType, componentName, propName] = parts;
+              
+              if (fieldType && componentName && propName) {
+                // Find the component by name in the field array
+                const fieldArray = trial[fieldType];
+                if (Array.isArray(fieldArray)) {
+                  const compIndex = fieldArray.findIndex(c => c.name === componentName);
+                  if (compIndex !== -1) {
+                    // Apply the override value (from typed or csv)
+                    let valueToSet;
+                    if (param.source === 'typed') {
+                      valueToSet = param.value;
+                    } else if (param.source === 'csv') {
+                      valueToSet = trial[param.value];
+                    }
+                    
+                    if (valueToSet !== undefined && valueToSet !== null) {
+                      fieldArray[compIndex][propName] = valueToSet;
+                    }
+                  }
+                }
+              }
+            } else {
+              // Normal parameter (not nested survey question)
+              if (param.source === 'typed' && param.value !== undefined && param.value !== null) {
+                trial[key] = param.value;
+              } else if (param.source === 'csv' && param.value !== undefined && param.value !== null) {
+                trial[key] = trial[param.value];
+              }
+            }
+          }
+        });
+        // Clear the custom parameters after applying them
+        window.branchCustomParameters = null;
+      }
+      
+    },
+    on_finish: function(data) {
+      // Trial terminal - si llegamos aquí después de branching, terminar el experimento
+      if (window.branchingActive) {
+        jsPsych.abortExperiment('', {});
+      }
+    },};
+    console.log("=== PROCEDURE SETUP New_Trial ===");
+    console.log("test_stimuli_New_Trial before procedure:", test_stimuli_New_Trial);
+    console.log("test_stimuli_New_Trial.length:", test_stimuli_New_Trial ? test_stimuli_New_Trial.length : 'undefined');
+    
+    const New_Trial_procedure = {
+    timeline: 
+    [New_Trial_timeline],
+    timeline_variables: test_stimuli_New_Trial,
+    
+    conditional_function: function() {
+      const currentId = 1772821583646;
+      
+      // Verificar si hay un trial objetivo guardado en localStorage (para repeat/jump)
+      const jumpToTrial = localStorage.getItem('jsPsych_jumpToTrial');
+      if (jumpToTrial) {
+        if (String(currentId) === String(jumpToTrial)) {
+          // Encontramos el trial objetivo para repeat/jump
+          console.log('🔁 [REPEAT/JUMP] Found target trial', currentId);
+          localStorage.removeItem('jsPsych_jumpToTrial');
+          return true;
+        }
+        // No es el objetivo, saltar
+        console.log('⏭️ [REPEAT/JUMP] Skipping trial', currentId);
+        return false;
+      }
+      
+      // Si skipRemaining está activo (branching normal), verificar si este es el trial objetivo
+      if (window.skipRemaining) {
+        console.log('🔍 [SKIP CHECK] Trial', currentId, '| Target:', window.nextTrialId, '| Match:', String(currentId) === String(window.nextTrialId));
+        if (String(currentId) === String(window.nextTrialId)) {
+          // Encontramos el trial objetivo
+          console.log('✅ [SKIP CHECK] Found target trial! Disabling skip mode');
+          window.skipRemaining = false;
+          window.nextTrialId = null;
+          return true;
+        }
+        // No es el objetivo, saltar
+        console.log('⏭️ [SKIP CHECK] Skipping trial', currentId);
+        return false;
+      }
+      
+      return true;
+    },
+  
+    
+    };
+    timeline.push(New_Trial_procedure);
+  
+
+    jsPsych.run(timeline);
+    
+
+
+})();
+
+</script></body></html>
